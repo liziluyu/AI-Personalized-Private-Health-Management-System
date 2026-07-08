@@ -65,8 +65,8 @@
             <el-table-column prop="phone" label="手机号" width="140" show-overflow-tooltip />
             <el-table-column label="角色" width="80" align="center">
               <template #default="{ row }">
-                <el-tag :type="row.role === 'admin' ? 'warning' : 'info'" size="small">
-                  {{ row.role === 'admin' ? '管理员' : '用户' }}
+                <el-tag :type="(row.role || '').toUpperCase() === 'ADMIN' ? 'warning' : 'info'" size="small">
+                  {{ (row.role || '').toUpperCase() === 'ADMIN' ? '管理员' : '用户' }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -99,6 +99,8 @@
             </el-table-column>
           </el-table>
 
+          <el-empty v-if="!userLoading && userList.length === 0" description="暂无用户数据" />
+
           <div class="pagination-wrapper">
             <el-pagination
               v-model:current-page="userPagination.pageNum"
@@ -106,8 +108,8 @@
               :page-sizes="[10, 20, 50, 100]"
               :total="userPagination.total"
               layout="total, sizes, prev, pager, next, jumper"
-              @size-change="handleUserSearch"
-              @current-change="handleUserSearch"
+              @size-change="handleUserSizeChange"
+              @current-change="handleUserPageChange"
             />
           </div>
         </el-card>
@@ -171,6 +173,8 @@
             </el-table-column>
           </el-table>
 
+          <el-empty v-if="!logLoading && logList.length === 0" description="暂无登录日志" />
+
           <div class="pagination-wrapper">
             <el-pagination
               v-model:current-page="logPagination.pageNum"
@@ -178,8 +182,8 @@
               :page-sizes="[10, 20, 50]"
               :total="logPagination.total"
               layout="total, sizes, prev, pager, next, jumper"
-              @size-change="handleLogSearch"
-              @current-change="handleLogSearch"
+              @size-change="handleLogSizeChange"
+              @current-change="handleLogPageChange"
             />
           </div>
         </el-card>
@@ -219,7 +223,15 @@ import { Search } from '@element-plus/icons-vue'
 import { getAdminUsers, toggleUserStatus, getLoginLogs } from '../../api/admin'
 import type { AdminUserItem, LoginLog } from '../../types'
 
-// ============ Tab =====  try {
+const activeTab = ref('users')
+const filterForm = reactive({ username: '', phone: '', status: null as number | null })
+const userLoading = ref(false)
+const userList = ref<AdminUserItem[]>([])
+const userPagination = reactive({ pageNum: 1, pageSize: 10, total: 0 })
+
+async function fetchUsers() {
+  userLoading.value = true
+  try {
     const res = await getAdminUsers({
       username: filterForm.username || undefined,
       phone: filterForm.phone || undefined,
@@ -230,16 +242,30 @@ import type { AdminUserItem, LoginLog } from '../../types'
     const d = res.data.data
     userList.value = d.items || []
     userPagination.total = d.total || 0
-  } catch { /* handled */ } finally { userLoading.value = false }
+  } catch {
+    ElMessage.error('获取用户列表失败')
+    userList.value = []
+  } finally { userLoading.value = false }
 }
 
 function handleUserSearch() { userPagination.pageNum = 1; fetchUsers() }
+function handleUserPageChange(page: number) { userPagination.pageNum = page; fetchUsers() }
+function handleUserSizeChange(size: number) { userPagination.pageNum = 1; userPagination.pageSize = size; fetchUsers() }
 function handleUserReset() {
   filterForm.username = ''; filterForm.phone = ''; filterForm.status = null
   userPagination.pageNum = 1; fetchUsers()
 }
 
-// ============ 启用/禁用 =====    const newStatus = row.status === 1 ? 0 : 1
+// ============ 启用/禁用 ============
+async function handleToggleStatus(row: AdminUserItem) {
+  const actionText = row.status === 1 ? '禁用' : '启用'
+  try {
+    await ElMessageBox.confirm(
+      `确定要${actionText}用户「${row.username}」吗？`,
+      `${actionText}账号`,
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' },
+    )
+    const newStatus = row.status === 1 ? 0 : 1
     await toggleUserStatus(row.userId, newStatus)
     ElMessage.success(`${actionText}成功`)
     row.status = newStatus
@@ -248,7 +274,51 @@ function handleUserReset() {
   }
 }
 
-// ============ 用户详情 =====function formatDate(dateStr: string) {
+// ============ 用户详情 ============
+const detailVisible = ref(false)
+const detailUser = ref<AdminUserItem | null>(null)
+function handleViewDetail(row: AdminUserItem) { detailUser.value = row; detailVisible.value = true }
+function genderLabel(g?: string) {
+  if (g === 'MALE') return '男'
+  if (g === 'FEMALE') return '女'
+  return g || '-'
+}
+
+// ============ 登录日志 ============
+const logFilter = reactive({ userId: null as number | null, result: null as number | null })
+const logLoading = ref(false)
+const logList = ref<LoginLog[]>([])
+const logPagination = reactive({ pageNum: 1, pageSize: 10, total: 0 })
+
+async function fetchLogs() {
+  logLoading.value = true
+  try {
+    const res = await getLoginLogs({
+      userId: logFilter.userId ?? undefined,
+      result: logFilter.result ?? undefined,
+      pageNum: logPagination.pageNum,
+      pageSize: logPagination.pageSize,
+    })
+    const d = res.data.data
+    logList.value = d.items || []
+    logPagination.total = d.total || 0
+  } catch {
+    ElMessage.error('获取登录日志失败')
+    logList.value = []
+  } finally { logLoading.value = false }
+}
+
+function handleLogSearch() { logPagination.pageNum = 1; fetchLogs() }
+function handleLogPageChange(page: number) { logPagination.pageNum = page; fetchLogs() }
+function handleLogSizeChange(size: number) { logPagination.pageNum = 1; logPagination.pageSize = size; fetchLogs() }
+
+function handleLogReset() { logFilter.userId = null; logFilter.result = null; logPagination.pageNum = 1; fetchLogs() }
+
+// ============ Tab 切换 ============
+function handleTabChange(name: string) { if (name === 'logs') fetchLogs() }
+
+// ============ 工具 ============
+function formatDate(dateStr: string) {
   if (!dateStr) return '-'
   const d = new Date(dateStr)
   return d.toLocaleString('zh-CN', { hour12: false })

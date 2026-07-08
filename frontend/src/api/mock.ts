@@ -30,6 +30,10 @@ export function mockPage<T>(items: T[], page = 1, size = 10, total = 0): { data:
   }
 }
 
+function compareDateTimeText(a: string, b: string) {
+  return a.localeCompare(b)
+}
+
 // ---- 模拟数据 ----
 
 // 可变健康数据（支持增删）
@@ -41,11 +45,23 @@ const _mockHealthItems = [
   { dataId: 4, userId: 1, dataType: 'SLEEP_HOURS', dataValue: '7.5', unit: '小时', recordTime: '2026-06-05 07:00:00' },
   { dataId: 5, userId: 1, dataType: 'EXERCISE_MINUTES', dataValue: '45', unit: '分钟', recordTime: '2026-06-04 18:00:00' },
 ]
-export function getMockHealthRecords() {
-  return { items: _mockHealthItems, page: 1, size: 10, total: _mockHealthItems.length }
+export function getMockHealthRecords(params?: { dataType?: string; startTime?: string; endTime?: string; page?: number; size?: number }) {
+  const page = params?.page || 1
+  const size = params?.size || 10
+
+  const filtered = _mockHealthItems
+    .filter((item) => !params?.dataType || item.dataType === params.dataType)
+    .filter((item) => !params?.startTime || compareDateTimeText(item.recordTime, params.startTime) >= 0)
+    .filter((item) => !params?.endTime || compareDateTimeText(item.recordTime, params.endTime) <= 0)
+    .sort((a, b) => compareDateTimeText(b.recordTime, a.recordTime) || b.dataId - a.dataId)
+
+  const start = (page - 1) * size
+  const items = filtered.slice(start, start + size)
+
+  return { items, page, size, total: filtered.length }
 }
-export function addMockHealthRecord(item: { dataType: string; dataValue: string; unit: string }) {
-  const r = { dataId: ++_healthId, userId: 1, ...item, recordTime: new Date().toISOString().replace('T', ' ').slice(0, 19) }
+export function addMockHealthRecord(item: { dataType: string; dataValue: string; unit: string; recordTime?: string }) {
+  const r = { dataId: ++_healthId, userId: 1, ...item, recordTime: item.recordTime || new Date().toISOString().replace('T', ' ').slice(0, 19) }
   _mockHealthItems.unshift(r)
   return r
 }
@@ -118,14 +134,38 @@ export const mockPlatformStatistics = {
   totalUsers: 128,
   totalHealthData: 3560,
   riskDistribution: { low: 85, medium: 32, high: 11 },
+  usersWithoutProfile: 0,
   dailyDataCount: [
-    { date: '2026-05-01', count: 42 },
-    { date: '2026-05-05', count: 55 },
-    { date: '2026-05-10', count: 38 },
-    { date: '2026-05-15', count: 61 },
-    { date: '2026-05-20', count: 48 },
-    { date: '2026-05-25', count: 52 },
+    { date: '2026-05-22', count: 42 },
+    { date: '2026-05-23', count: 37 },
+    { date: '2026-05-24', count: 45 },
+    { date: '2026-05-25', count: 40 },
+    { date: '2026-05-26', count: 51 },
+    { date: '2026-05-27', count: 48 },
+    { date: '2026-05-28', count: 56 },
+    { date: '2026-05-29', count: 43 },
+    { date: '2026-05-30', count: 39 },
+    { date: '2026-05-31', count: 47 },
     { date: '2026-06-01', count: 45 },
+    { date: '2026-06-02', count: 53 },
+    { date: '2026-06-03', count: 41 },
+    { date: '2026-06-04', count: 49 },
+    { date: '2026-06-05', count: 58 },
+    { date: '2026-06-06', count: 44 },
+    { date: '2026-06-07', count: 46 },
+    { date: '2026-06-08', count: 52 },
+    { date: '2026-06-09', count: 61 },
+    { date: '2026-06-10', count: 55 },
+    { date: '2026-06-11', count: 50 },
+    { date: '2026-06-12', count: 57 },
+    { date: '2026-06-13', count: 43 },
+    { date: '2026-06-14', count: 38 },
+    { date: '2026-06-15', count: 54 },
+    { date: '2026-06-16', count: 47 },
+    { date: '2026-06-17', count: 51 },
+    { date: '2026-06-18', count: 59 },
+    { date: '2026-06-19', count: 46 },
+    { date: '2026-06-20', count: 62 },
   ],
 }
 

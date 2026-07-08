@@ -20,14 +20,14 @@ request.interceptors.response.use(
   (response) => {
     const data = response.data as ApiResponse
     if (data.code !== 0) {
-      // AI 服务异常时精简提示
-      const msg = data.code === 50000
-        ? 'AI 服务异常，请稍后重试'
-        : (data.message || '请求失败')
-      ElMessage.error(msg)
+      const shouldSuppressMessage = data.code === 40901 || data.code === 40902
+      if (!shouldSuppressMessage) {
+        ElMessage.error(data.message || '请求失败')
+      }
       // reject 时附带原始 code，便于调用方按需处理
-      const err = new Error(data.message) as Error & { code: number }
+      const err = new Error(data.message) as Error & { code: number; data?: unknown }
       err.code = data.code
+      err.data = data.data
       return Promise.reject(err)
     }
     return response
@@ -37,6 +37,18 @@ request.interceptors.response.use(
       localStorage.removeItem('token')
       localStorage.removeItem('userInfo')
       window.location.href = '/login'
+    }
+
+    const responseData = error.response?.data as ApiResponse | undefined
+    if (responseData?.code) {
+      const shouldSuppressMessage = responseData.code === 40901 || responseData.code === 40902
+      if (!shouldSuppressMessage) {
+        ElMessage.error(responseData.message || '请求失败')
+      }
+      const err = new Error(responseData.message) as Error & { code: number; data?: unknown }
+      err.code = responseData.code
+      err.data = responseData.data
+      return Promise.reject(err)
     }
     // 请求超时
     if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {

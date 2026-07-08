@@ -1,13 +1,16 @@
 package com.health.backend.controller;
 
+import java.sql.Date;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.health.backend.domain.HealthProfile;
 import com.health.backend.domain.LoginLog;
 import com.health.backend.domain.User;
 import com.health.backend.domain.UserStatus;
@@ -25,6 +29,7 @@ import com.health.backend.dto.ApiResponse;
 import com.health.backend.dto.PageResponse;
 import com.health.backend.dto.UserSummaryResponse;
 import com.health.backend.repository.HealthDataRepository;
+import com.health.backend.repository.HealthProfileRepository;
 import com.health.backend.repository.LoginLogRepository;
 import com.health.backend.repository.UserRepository;
 
@@ -38,13 +43,16 @@ public class AdminController {
     private final UserRepository userRepository;
     private final LoginLogRepository loginLogRepository;
     private final HealthDataRepository healthDataRepository;
+    private final HealthProfileRepository healthProfileRepository;
 
     public AdminController(UserRepository userRepository,
                            LoginLogRepository loginLogRepository,
-                           HealthDataRepository healthDataRepository) {
+                           HealthDataRepository healthDataRepository,
+                           HealthProfileRepository healthProfileRepository) {
         this.userRepository = userRepository;
         this.loginLogRepository = loginLogRepository;
         this.healthDataRepository = healthDataRepository;
+        this.healthProfileRepository = healthProfileRepository;
     }
 
     /** 用户列表 */
@@ -56,6 +64,7 @@ public class AdminController {
         @RequestParam(defaultValue = "1") int pageNum,
         @RequestParam(defaultValue = "10") int pageSize
     ) {
+        UserStatus statusFilter = parseStatusFilter(status);
         Specification<User> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (username != null && !username.isBlank()) {
@@ -64,8 +73,8 @@ public class AdminController {
             if (phone != null && !phone.isBlank()) {
                 predicates.add(cb.like(root.get("phone"), "%" + phone + "%"));
             }
-            if (status != null && !status.isBlank()) {
-                predicates.add(cb.equal(root.get("status"), UserStatus.valueOf(status)));
+            if (statusFilter != null) {
+                predicates.add(cb.equal(root.get("status"), statusFilter));
             }
             return cb.and(predicates.toArray(new Predicate[0]));
         };
@@ -77,7 +86,7 @@ public class AdminController {
             .map(u -> new UserSummaryResponse(
                 u.getUserId(), u.getUsername(), u.getPhone(),
                 u.getRole().name(),
-                u.getStatus() == UserStatus.ENABLED ? 1 : 0,
+                u.getStatus().getCode(),
                 u.getCreateTime().toString(),
                 u.getBirthDate(),
                 u.getGender() != null ? u.getGender().name() : null,
@@ -95,9 +104,16 @@ public class AdminController {
     ) {
         User user = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("用户不存在"));
-        user.setStatus(body.get("status") == 1 ? UserStatus.ENABLED : UserStatus.DISABLED);
+        user.setStatus(UserStatus.fromCode(body.get("status")));
         userRepository.save(user);
         return ApiResponse.success(null);
+    }
+
+    private UserStatus parseStatusFilter(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        return UserStatus.fromRequestValue(status);
     }
 
     /** 登录日志 */
@@ -120,16 +136,10 @@ public class AdminController {
         };
 
         Page<LoginLog> logPage = loginLogRepository.findAll(spec,
-            PageRequest.of(pageNum - 1, pageSize));
+            PageRequest.of(pageNum - 1, pageSize, Sort.by(Sort.Direction.DESC, "loginTime", "logId")));
 
         List<Map<String, Object>> items = logPage.getContent().stream()
-            .map(log -> Map.<String, Object>of(
-                "logId", log.getLogId(),
-                "userId", log.getUserId(),
-                "phone", userRepository.findById(log.getUserId()).map(User::getPhone).orElse("未知"),
-                "loginIp", log.getLoginIp() != null ? log.getLoginIp() : "",
-                "loginTime", log.getLoginTime().toString(),
-                "loginResult", log.getLoginResult()))
+            .map(this::toLoginLogItem)
             .toList();
 
         return ApiResponse.success(new PageResponse<>(items, pageNum, pageSize, logPage.getTotalElements()));
@@ -137,29 +147,75 @@ public class AdminController {
 
     /** 平台统计 */
     @GetMapping("/statistics")
-    public ApiResponse<Map<String, Object>> statistics(
-        @RequestParam(required = false) LocalDate startDate,
-        @RequestParam(required = false) LocalDate endDate
-    ) {
-        if (startDate == null) startDate = LocalDate.now().minusDays(30);
-        if (endDate == null) endDate = LocalDate.now();
-
+    public ApiResponse<Map<String, Object>> statistics() {
         long totalUsers = userRepository.count();
-
-        LocalDateTime start = startDate.atStartOfDay();
-        LocalDateTime end = endDate.atTime(23, 59, 59);
-
         long totalHealthData = healthDataRepository.count();
 
-        Map<String, Long> riskDistribution = Map.of("low", totalUsers * 2 / 3,
-            "medium", totalUsers / 4, "high", totalUsers / 10);
+        // 按每个用户最新一份 health_profile 统计当前风险人数
+        List<HealthProfile> latestProfiles = healthProfileRepository.findLatestProfilesPerUser();
+        long lowRisk = latestProfiles.stream().filter(p -> "LOW".equalsIgnoreCase(p.getRiskLevel())).count();
+        long mediumRisk = latestProfiles.stream().filter(p -> "MEDIUM".equalsIgnoreCase(p.getRiskLevel())).count();
+        long highRisk = latestProfiles.stream().filter(p -> "HIGH".equalsIgnoreCase(p.getRiskLevel())).count();
+        long usersWithoutProfile = Math.max(0, totalUsers - latestProfiles.size());
 
-        List<Map<String, Object>> dailyDataCount = List.of();
+        Map<String, Long> riskDistribution = Map.of("low", lowRisk, "medium", mediumRisk, "high", highRisk);
+
+        List<Map<String, Object>> dailyDataCount = buildDailyDataCount();
 
         return ApiResponse.success(Map.of(
             "totalUsers", totalUsers,
             "totalHealthData", totalHealthData,
             "riskDistribution", riskDistribution,
+            "usersWithoutProfile", usersWithoutProfile,
             "dailyDataCount", dailyDataCount));
+    }
+
+    private Map<String, Object> toLoginLogItem(LoginLog log) {
+        Map<String, Object> item = new HashMap<>();
+        item.put("logId", log.getLogId());
+        item.put("userId", log.getUserId());
+        item.put("phone", resolvePhone(log.getUserId()));
+        item.put("loginIp", log.getLoginIp() != null ? log.getLoginIp() : "");
+        item.put("loginTime", log.getLoginTime().toString());
+        item.put("loginResult", log.getLoginResult());
+        return item;
+    }
+
+    private String resolvePhone(Long userId) {
+        if (userId == null) {
+            return "未知";
+        }
+        return userRepository.findById(userId).map(User::getPhone).orElse("未知");
+    }
+
+    private List<Map<String, Object>> buildDailyDataCount() {
+        LocalDate endDate = LocalDate.now();
+        LocalDate startDate = endDate.minusDays(29);
+        LocalDateTime start = startDate.atStartOfDay();
+        LocalDateTime endExclusive = endDate.plusDays(1).atStartOfDay();
+
+        Map<LocalDate, Long> countsByDate = new HashMap<>();
+        for (Object[] row : healthDataRepository.countDailyRecordsBetween(start, endExclusive)) {
+            countsByDate.put(toLocalDate(row[0]), ((Number) row[1]).longValue());
+        }
+
+        List<Map<String, Object>> dailyDataCount = new ArrayList<>();
+        for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
+            dailyDataCount.add(Map.of(
+                "date", date.toString(),
+                "count", countsByDate.getOrDefault(date, 0L)
+            ));
+        }
+        return dailyDataCount;
+    }
+
+    private LocalDate toLocalDate(Object value) {
+        if (value instanceof LocalDate localDate) {
+            return localDate;
+        }
+        if (value instanceof Date sqlDate) {
+            return sqlDate.toLocalDate();
+        }
+        return LocalDate.parse(String.valueOf(value));
     }
 }
