@@ -38,3 +38,4 @@
 | [testreport/健康数据管理模块测试计划与用例报告.md](testreport/健康数据管理模块测试计划与用例报告.md) | 健康数据管理模块测试报告 |
 | [testreport/健康可视化模块测试计划与用例报告.md](testreport/健康可视化模块测试计划与用例报告.md) | 健康可视化模块测试报告 |
 | [testreport/管理员模块测试计划与用例报告.md](testreport/管理员模块测试计划与用例报告.md) | 管理员模块测试报告 |
+| [testreport/AI健康分析模块测试计划与用例报告.md](testreport/AI健康分析模块测试计划与用例报告.md) | AI健康分析模块测试报告 |
